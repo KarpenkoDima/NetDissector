@@ -1,4 +1,5 @@
 ﻿using NetDissector.Interfaces;
+using PacketDotNet;
 using System.Net.Http.Headers;
 
 namespace NetDissector.Protocols;
@@ -15,7 +16,10 @@ public class EthernetFrame : IPacket
 
     public EthernetFrame()
     {
-        
+        DestinationMac = new byte[EthernetFields.MacAddressLength];
+        SourceMac = new byte[EthernetFields.MacAddressLength];
+        EtherType = 0;
+        Payload = Array.Empty<byte>();
     }
 
     public EthernetFrame(ReadOnlySpan<byte> rawData, int offset=0)
@@ -26,20 +30,22 @@ public class EthernetFrame : IPacket
     #region interface IPacket
     public void Parse(ReadOnlySpan<byte> rawData, int offset = 0)
     {
-        if (rawData.Length - offset < 14)
+        // Проверяем границы
+        if (rawData.Length - offset < EthernetFields.HeaderLength)
         {
             throw new ArgumentException("Длина меньше чем 14 байт минимальной длны Ethernet II (DIX) frame");
         }
-        if ((rawData[12] << 8 | rawData[13]) < 0x0600)
-        { throw new ArgumentException("Данный массивбайт не является Ethernet II (DIX) frame"); }
+        if ((rawData[EthernetFields.EthernetTypePosition] << 8 |
+            rawData[EthernetFields.EthernetTypePosition + 1]) < 0x0600)
+        { throw new ArgumentException("Данный массив байт не является Ethernet II (DIX) frame"); }
 
-        DestinationMac = rawData.Slice(offset, 6).ToArray();
-        SourceMac = rawData.Slice(offset + 6, 6).ToArray();
-        EtherType = (ushort)(rawData[12] << 8 | rawData[13]);
-        if (rawData.Length - offset >= 14)
+        DestinationMac = rawData.Slice(offset, EthernetFields.MacAddressLength).ToArray();
+        SourceMac = rawData.Slice(offset + EthernetFields.SourceMacPosition, EthernetFields.MacAddressLength).ToArray();
+        EtherType = (ushort)(rawData[EthernetFields.EthernetTypePosition] << 8 | rawData[EthernetFields.EthernetTypePosition + 1]);
+        if (rawData.Length - offset >= EthernetFields.HeaderLength)
         {
-            Payload = new byte[rawData.Length - offset - 14];
-            Payload = rawData.Slice(14, Payload.Length).ToArray();
+            Payload = new byte[rawData.Length - offset - EthernetFields.HeaderLength];
+            Payload = rawData.Slice(EthernetFields.HeaderLength, Payload.Length).ToArray();
         }
         else Payload = null;
 
@@ -51,20 +57,20 @@ public class EthernetFrame : IPacket
         {
             throw new ArgumentException("Destination MAC должен быть 6 байт длинной");
         }
-        if (SourceMac == null || SourceMac.Length != 6)
+        if (SourceMac == null || SourceMac.Length != EthernetFields.MacAddressLength)
         {
             throw new ArgumentException("Source MAC должен быть 6 байт длинной");
         }
-        int frameLength = DestinationMac.Length + SourceMac.Length + 2 + Payload.Length;
+        int frameLength = EthernetFields.HeaderLength + Payload.Length;
 
         byte[] frame = new byte[frameLength];
         Span<byte> frameSpan = frame;
 
         Span<byte> destinationMac = new Span<byte>(DestinationMac);
-        destinationMac.CopyTo(frameSpan.Slice(0, destinationMac.Length));
+        destinationMac.CopyTo(frameSpan.Slice(EthernetFields.DestinationMacPosition, destinationMac.Length));
 
         Span<byte> sourceMac = new Span<byte>(SourceMac);
-        sourceMac.CopyTo(frameSpan.Slice(DestinationMac.Length, sourceMac.Length));
+        sourceMac.CopyTo(frameSpan.Slice(EthernetFields.SourceMacPosition, EthernetFields.MacAddressLength));
 
         byte[] etherTypeBytes = BitConverter.GetBytes(EtherType);
         if (BitConverter.IsLittleEndian)
@@ -72,10 +78,10 @@ public class EthernetFrame : IPacket
             Array.Reverse(etherTypeBytes);
         }
         Span<byte> etherTypeSpan = new Span<byte>(etherTypeBytes);
-        etherTypeSpan.CopyTo(frameSpan.Slice(DestinationMac.Length + SourceMac.Length, 2));
+        etherTypeSpan.CopyTo(frameSpan.Slice(EthernetFields.EthernetTypePosition, EthernetFields.EthernetTypeLength));
 
         Span<byte> payloadSpan = new Span<byte>(Payload);
-        payloadSpan.CopyTo(frameSpan.Slice(DestinationMac.Length + SourceMac.Length + 2));
+        payloadSpan.CopyTo(frameSpan.Slice(EthernetFields.HeaderLength));
 
         return frame;
 
