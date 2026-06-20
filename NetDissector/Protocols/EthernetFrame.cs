@@ -1,90 +1,69 @@
-﻿using NetDissector.Interfaces;
-using PacketDotNet;
-using System.Net.Http.Headers;
+using System.Buffers.Binary;
 
 namespace NetDissector.Protocols;
 
 /// <summary>
-/// Класс представляющий Ethernet II (DIX) frame
+/// Ethernet II (DIX) frame. Zero-allocation view over a byte buffer.
 /// </summary>
-public class EthernetFrame : IPacket
+public readonly ref struct EthernetFrame
 {
-    public byte[] DestinationMac { get; set; }
-    public byte[] SourceMac { get; set; }
-    public ushort EtherType { get; set; }
-    public byte[]? Payload { get; set; }
+    public ReadOnlySpan<byte> DestinationMac { get; }
+    public ReadOnlySpan<byte> SourceMac { get; }
+    public ushort EtherType { get; }
+    public ReadOnlySpan<byte> Payload { get; }
 
-    public EthernetFrame()
+    private EthernetFrame(ReadOnlySpan<byte> destinationMac, ReadOnlySpan<byte> sourceMac, ushort etherType, ReadOnlySpan<byte> payload)
     {
-        DestinationMac = new byte[EthernetFields.MacAddressLength];
-        SourceMac = new byte[EthernetFields.MacAddressLength];
-        EtherType = 0;
-        Payload = Array.Empty<byte>();
+        DestinationMac = destinationMac;
+        SourceMac = sourceMac;
+        EtherType = etherType;
+        Payload = payload;
     }
 
-    public EthernetFrame(ReadOnlySpan<byte> rawData, int offset=0)
+    public static bool TryParse(ReadOnlySpan<byte> rawData, out EthernetFrame frame)
     {
-        Parse(rawData, offset);
+        frame = default;
+
+        if (rawData.Length < EthernetFields.HeaderLength)
+        {
+            return false;
+        }
+
+        ushort etherType = BinaryPrimitives.ReadUInt16BigEndian(rawData.Slice(EthernetFields.EthernetTypePosition, EthernetFields.EthernetTypeLength));
+        if (etherType < 0x0600)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<byte> destinationMac = rawData.Slice(EthernetFields.DestinationMacPosition, EthernetFields.MacAddressLength);
+        ReadOnlySpan<byte> sourceMac = rawData.Slice(EthernetFields.SourceMacPosition, EthernetFields.MacAddressLength);
+        ReadOnlySpan<byte> payload = rawData.Slice(EthernetFields.HeaderLength);
+
+        frame = new EthernetFrame(destinationMac, sourceMac, etherType, payload);
+        return true;
     }
 
-    #region interface IPacket
-    public void Parse(ReadOnlySpan<byte> rawData, int offset = 0)
+    public bool TrySerialize(Span<byte> destination, out int bytesWritten)
     {
-        // Проверяем границы
-        if (rawData.Length - offset < EthernetFields.HeaderLength)
-        {
-            throw new ArgumentException("Длина меньше чем 14 байт минимальной длны Ethernet II (DIX) frame");
-        }
-        if ((rawData[EthernetFields.EthernetTypePosition] << 8 |
-            rawData[EthernetFields.EthernetTypePosition + 1]) < 0x0600)
-        { throw new ArgumentException("Данный массив байт не является Ethernet II (DIX) frame"); }
+        bytesWritten = 0;
 
-        DestinationMac = rawData.Slice(offset, EthernetFields.MacAddressLength).ToArray();
-        SourceMac = rawData.Slice(offset + EthernetFields.SourceMacPosition, EthernetFields.MacAddressLength).ToArray();
-        EtherType = (ushort)(rawData[EthernetFields.EthernetTypePosition] << 8 | rawData[EthernetFields.EthernetTypePosition + 1]);
-        if (rawData.Length - offset >= EthernetFields.HeaderLength)
+        if (DestinationMac.Length != EthernetFields.MacAddressLength || SourceMac.Length != EthernetFields.MacAddressLength)
         {
-            Payload = new byte[rawData.Length - offset - EthernetFields.HeaderLength];
-            Payload = rawData.Slice(EthernetFields.HeaderLength, Payload.Length).ToArray();
+            return false;
         }
-        else Payload = null;
 
-    }
-
-    public byte[] Serialize()
-    {
-        if (DestinationMac == null || DestinationMac.Length != 6)
-        {
-            throw new ArgumentException("Destination MAC должен быть 6 байт длинной");
-        }
-        if (SourceMac == null || SourceMac.Length != EthernetFields.MacAddressLength)
-        {
-            throw new ArgumentException("Source MAC должен быть 6 байт длинной");
-        }
         int frameLength = EthernetFields.HeaderLength + Payload.Length;
-
-        byte[] frame = new byte[frameLength];
-        Span<byte> frameSpan = frame;
-
-        Span<byte> destinationMac = new Span<byte>(DestinationMac);
-        destinationMac.CopyTo(frameSpan.Slice(EthernetFields.DestinationMacPosition, destinationMac.Length));
-
-        Span<byte> sourceMac = new Span<byte>(SourceMac);
-        sourceMac.CopyTo(frameSpan.Slice(EthernetFields.SourceMacPosition, EthernetFields.MacAddressLength));
-
-        byte[] etherTypeBytes = BitConverter.GetBytes(EtherType);
-        if (BitConverter.IsLittleEndian)
+        if (destination.Length < frameLength)
         {
-            Array.Reverse(etherTypeBytes);
+            return false;
         }
-        Span<byte> etherTypeSpan = new Span<byte>(etherTypeBytes);
-        etherTypeSpan.CopyTo(frameSpan.Slice(EthernetFields.EthernetTypePosition, EthernetFields.EthernetTypeLength));
 
-        Span<byte> payloadSpan = new Span<byte>(Payload);
-        payloadSpan.CopyTo(frameSpan.Slice(EthernetFields.HeaderLength));
+        DestinationMac.CopyTo(destination.Slice(EthernetFields.DestinationMacPosition, EthernetFields.MacAddressLength));
+        SourceMac.CopyTo(destination.Slice(EthernetFields.SourceMacPosition, EthernetFields.MacAddressLength));
+        BinaryPrimitives.WriteUInt16BigEndian(destination.Slice(EthernetFields.EthernetTypePosition, EthernetFields.EthernetTypeLength), EtherType);
+        Payload.CopyTo(destination.Slice(EthernetFields.HeaderLength));
 
-        return frame;
-
+        bytesWritten = frameLength;
+        return true;
     }
-    #endregion
 }

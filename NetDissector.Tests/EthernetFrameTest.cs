@@ -1,4 +1,4 @@
-﻿using FluentAssertions;
+using FluentAssertions;
 using NetDissector.Protocols;
 namespace NetDissector.Tests;
 
@@ -13,41 +13,43 @@ public class EthernetFrameTest
     };
 
     [Fact]
-    public void Parse_ValidByteArray_ShouldReturnCorrectProperties()
+    public void TryParse_ValidByteArray_ShouldReturnCorrectProperties()
     {
-        // Arrange
-        byte[] rawData = _validRawFrame;
-
         // Act
-        EthernetFrame ethernetFrame = new EthernetFrame();
-        ethernetFrame.Parse(rawData);
+        bool success = EthernetFrame.TryParse(_validRawFrame, out EthernetFrame frame);
 
         // Assert
-        ethernetFrame.DestinationMac.Should().Equal(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF });
-        ethernetFrame.SourceMac.Should().Equal(new byte[] { 0x00, 0x0C, 0x29, 0x48, 0x8A, 0x2B });
-        ethernetFrame.EtherType.Should().Be(0x0800);
-        ethernetFrame.Payload.Should().StartWith(new byte[] { 0x45, 0x00 });
+        success.Should().BeTrue();
+        frame.DestinationMac.ToArray().Should().Equal(new byte[] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF });
+        frame.SourceMac.ToArray().Should().Equal(new byte[] { 0x00, 0x0C, 0x29, 0x48, 0x8A, 0x2B });
+        frame.EtherType.Should().Be(0x0800);
+        frame.Payload.ToArray().Should().StartWith(new byte[] { 0x45, 0x00 });
     }
 
     [Fact]
-    public void Serialize_ValidPacket_ShouldMatchExpectedBytes()
+    public void TrySerialize_ValidPacket_ShouldMatchExpectedBytes()
     {
         // Arrange
-        var packet = new EthernetFrame(_validRawFrame);
+        EthernetFrame.TryParse(_validRawFrame, out EthernetFrame frame);
+        Span<byte> destination = new byte[_validRawFrame.Length];
 
         // Act
-        byte[] result = packet.Serialize();
+        bool success = frame.TrySerialize(destination, out int bytesWritten);
 
         // Assert
-        result.Should().BeEquivalentTo(_validRawFrame);
+        success.Should().BeTrue();
+        bytesWritten.Should().Be(_validRawFrame.Length);
+        destination.ToArray().Should().BeEquivalentTo(_validRawFrame);
     }
 
     [Theory]
     [InlineData(new byte[] { 0x00, 0x01 })] // Слишком короткий массив
-    public void Parse_InvalidLength_ShouldThrowException(byte[] invalidData)
+    public void TryParse_InvalidLength_ShouldReturnFalse(byte[] invalidData)
     {
-        // Act & Assert       
-        EthernetFrame ethernetFrame = new EthernetFrame();
-        Assert.Throws<ArgumentException>(() => ethernetFrame.Parse(invalidData));
+        // Act
+        bool success = EthernetFrame.TryParse(invalidData, out EthernetFrame frame);
+
+        // Assert
+        success.Should().BeFalse();
     }
 }

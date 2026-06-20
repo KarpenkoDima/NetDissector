@@ -38,11 +38,12 @@ byte[] rawData = new byte[]
     0x45, 0x00, 0x00, 0x54              // Payload...
 }
 
-var frame = new EthernetFrame(rawData);
-
-Console.WriteLine($"Source MAC: {BitConverter.ToString(frame.SourceMac)}");
-Console.WriteLine($"Dest MAC: {BitConverter.ToString(frame.DestinationMac)}");
-Console.WriteLine($"EtherType: 0x{frame.EtherType:X4}");
+if (EthernetFrame.TryParse(rawData, out EthernetFrame frame))
+{
+    Console.WriteLine($"Source MAC: {BitConverter.ToString(frame.SourceMac.ToArray())}");
+    Console.WriteLine($"Dest MAC: {BitConverter.ToString(frame.DestinationMac.ToArray())}");
+    Console.WriteLine($"EtherType: 0x{frame.EtherType:X4}");
+}
 ```
 **Вывод:**
 ```
@@ -53,29 +54,23 @@ EtherType: 0x0800
 ## 🏗Архитектура
 ```
 NetDissector/
-├── Interfaces/
-│   └── IPacket.cs           # Базовый интерфейс для всех пакетов
 ├── Protocols/
-│   ├── EthernetFrame.cs     # Ethernet II (DIX) parser
+│   ├── EthernetFrame.cs     # Ethernet II (DIX) parser (readonly ref struct, zero-allocation)
 │   └── EthernetFields.cs    # Константы структуры фрейма
 └── NetDissector.csproj
 
 NetDissector.Tests/
 └── EthernetFrameTest.cs     # Unit-тесты
 ```
-### Интерфейс IPacket
-```csharp
-public interface IPacket
-{
-    void Parse(ReadOnlySpan<byte> rawData, int offset = 0);
-    byte[] Serialize();
-}
-```
+### Конвенция парсинга
 
-Все протоколы реализуют этот интерфейс, обеспечивая единообразный API.
+Каждый протокол реализуется как `readonly ref struct` со статическими методами
+`TryParse(ReadOnlySpan<byte>, out T)` и `TrySerialize(Span<byte>, out int bytesWritten)`,
+без исключений в качестве управления потоком и без аллокаций в hot path.
+
 ## 🗺 Roadmap
 ### v0.1.0✅
-- [x] Базовая архитектура (IPacket)
+- [x] Базовая архитектура (zero-allocation `TryParse`/`TrySerialize`)
 - [x] Ethernet II frame parser
 - [x] Unit-тесты
 - [x] CI/CD (GitHub Actions)
